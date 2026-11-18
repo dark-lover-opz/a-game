@@ -90,7 +90,9 @@ Building a model from a reference image:
 4. After each major step, call get_viewport_screenshot (try views like
    front, right, top, iso) and compare against the reference. Fix
    proportions before adding detail.
-5. Apply materials with set_material. Finish with a final screenshot and
+5. To animate, set the range with set_animation_settings and pose objects,
+   cameras or empties used as joints with set_keyframe on several frames.
+6. Apply materials with set_material. Finish with a final screenshot and
    offer to save (save_blend_file) or export (export_model).
 """
 
@@ -216,6 +218,40 @@ def set_view(view: str | None = None, frame_all: bool = True, perspective: bool 
     """Point the 3D Viewport: view is front, back, left, right, top, bottom, iso or camera.
     frame_all zooms to fit everything. perspective False switches to orthographic."""
     return _text(_call("set_view", view=view, frame_all=frame_all, perspective=perspective))
+
+
+@mcp.tool()
+def set_keyframe(
+    object: str,
+    frame: int,
+    location: list[float] | None = None,
+    rotation: list[float] | None = None,
+    scale: list[float] | None = None,
+    interpolation: str | None = None,
+) -> str:
+    """Animate: put an object (or camera, or a pivot/empty used as a joint) at a pose on a frame and
+    keyframe it. rotation is in degrees. interpolation: bezier (smooth), linear or constant.
+    Blender plays the motion between keyframes."""
+    return _text(_call("set_keyframe", object=object, frame=frame, location=location, rotation=rotation,
+                       scale=scale, interpolation=interpolation))
+
+
+@mcp.tool()
+def set_animation_settings(
+    frame_start: int | None = None,
+    frame_end: int | None = None,
+    fps: int | None = None,
+    current_frame: int | None = None,
+) -> str:
+    """Set the animation's frame range and frames per second, or jump to a frame to see the pose there."""
+    return _text(_call("set_animation_settings", frame_start=frame_start, frame_end=frame_end, fps=fps,
+                       current_frame=current_frame))
+
+
+@mcp.tool()
+def clear_animation(object: str) -> str:
+    """Remove all keyframes from an object."""
+    return _text(_call("clear_animation", object=object))
 
 
 @mcp.tool()

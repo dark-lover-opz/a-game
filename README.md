@@ -107,6 +107,7 @@ tracing guide (`add_reference_image`).
 | `set_material` | Color, metal, roughness, emission, transparency |
 | `delete_objects`, `clear_scene` | Remove objects |
 | `execute_blender_code` | Run Python (`bpy`, `bmesh`) for anything else: modifiers, extrusions, curves, custom meshes |
+| `set_keyframe`, `set_animation_settings`, `clear_animation` | Animate objects, cameras and posable joints |
 | `set_view`, `get_viewport_screenshot` | Look at the model from any side to compare it with the reference |
 | `view_image_file`, `add_reference_image` | Look at a reference image on disk / place it in the scene |
 | `export_model`, `save_blend_file` | Save the result |
