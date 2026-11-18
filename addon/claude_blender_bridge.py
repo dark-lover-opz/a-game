@@ -787,10 +787,32 @@ def cmd_add_reference_image(path, view="front", size=5.0, opacity=0.5, location=
     return {"name": obj.name, "image": image.name, "image_size": list(image.size), "view": view}
 
 
+MISSING_NUMPY_HINT = (
+    "This Blender build has no numpy, which Blender's own %s exporter needs. Linux distribution "
+    "packages (for example Ubuntu's `apt install blender`) often leave it out. Export as obj or stl "
+    "instead, or install Blender from blender.org, which includes numpy."
+)
+
+
+def _explain_export_error(fmt, exc):
+    """Turn a confusing exporter crash into advice when the cause is a missing numpy."""
+    if "numpy" in str(exc):
+        return RuntimeError(MISSING_NUMPY_HINT % fmt.upper())
+    return exc
+
+
 def cmd_export_model(path, format=None, selected_only=False):
     path = os.path.abspath(os.path.expanduser(path))
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     fmt = (format or os.path.splitext(path)[1].lstrip(".")).lower()
+    try:
+        _export(path, fmt, selected_only)
+    except Exception as exc:
+        raise _explain_export_error(fmt, exc) from exc
+    return {"path": path, "format": fmt, "bytes": os.path.getsize(path) if os.path.exists(path) else None}
+
+
+def _export(path, fmt, selected_only):
     if fmt in ("glb", "gltf"):
         bpy.ops.export_scene.gltf(filepath=path, export_format="GLB" if fmt == "glb" else "GLTF_SEPARATE",
                                   use_selection=selected_only)
@@ -807,7 +829,6 @@ def cmd_export_model(path, format=None, selected_only=False):
         bpy.ops.wm.usd_export(filepath=path, selected_objects_only=selected_only)
     else:
         raise ValueError("Unsupported format %r. Use glb, gltf, fbx, obj, stl or usd." % fmt)
-    return {"path": path, "format": fmt, "bytes": os.path.getsize(path) if os.path.exists(path) else None}
 
 
 def cmd_save_blend_file(path=None):
