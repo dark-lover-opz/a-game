@@ -18,16 +18,20 @@ and fixes what doesn't match.
 ## You stay in control
 
 The first time Claude tries to do anything in a Blender session, Blender
-pops up a question:
+opens a dialog:
 
-> **Claude wants to use this Blender.** It will be able to create, change and
-> delete objects and run Python scripts in this Blender.
-> **Allow (this session)** · **Always allow** · **Deny**
+> **Allow Claude to use Blender?** Claude wants to use this Blender. It will be
+> able to create, change and delete objects and run Python scripts in this Blender.
+> ☐ Don't ask again · **Deny** · **Allow**
 
-Nothing runs until you click **Allow**. If the pop-up closes, the same buttons
-are in the 3D Viewport sidebar (press **N**, then open the **Claude** tab).
-**Reset permission** in that tab takes your answer back at any time, and
-**Stop Server** disconnects Claude completely.
+Nothing runs until you click **Allow** (the button says **OK** in Blender 4.0).
+The dialog stays open until you answer, even if you move the mouse away.
+Tick **Don't ask again** to skip the question in future Blender sessions.
+If you close the dialog, the same buttons wait in the 3D Viewport sidebar
+(press **N**, then open the **Claude** tab). **Reset permission** in that tab
+takes your answer back at any time, and **Stop Server** disconnects Claude
+completely. If nobody answers within 2 minutes, Claude is told to ask you
+to click Allow.
 
 Claude Desktop and Claude Code also ask you before each tool is used, unless
 you have allowed that tool.
@@ -35,6 +39,9 @@ you have allowed that tool.
 ## Setup
 
 You need Blender 3.6 or newer and [uv](https://docs.astral.sh/uv/getting-started/installation/).
+Use Blender from [blender.org](https://www.blender.org/download/) or Steam. Some
+Linux distribution packages (Ubuntu's `apt install blender`, for example) leave
+out numpy, and without it Blender cannot export `.glb` or `.fbx` files.
 
 ### 1. Install the Blender add-on
 
@@ -44,7 +51,8 @@ You need Blender 3.6 or newer and [uv](https://docs.astral.sh/uv/getting-started
    or click **Install…** in older versions. Pick the file.
 3. Tick **Claude Blender Bridge** to enable it.
 
-The server starts on its own when Blender opens. To check, open the
+The server starts on its own whenever Blender opens, including when you open
+it by double-clicking a `.blend` file. To check, open the
 **Claude** tab in the 3D Viewport sidebar (**N**); it should say
 *Server running on port 9876*.
 

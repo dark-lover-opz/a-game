@@ -103,7 +103,7 @@ def test_reference_image_and_export(tmp_path):
 def test_screenshot_in_background_mode_fails_cleanly():
     # Headless Blender has no screen to capture; the error must come back, not crash.
     response = bridge.run_command("get_viewport_screenshot", {})
-    assert response["status"] == "error" and response["message"]
+    assert response["status"] == "error" and "without a window" in response["message"]
 
 
 def _request_in_thread(port, command, params=None):
