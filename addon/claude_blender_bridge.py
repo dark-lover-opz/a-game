@@ -751,6 +751,73 @@ def cmd_get_viewport_screenshot(max_size=800, view=None, frame_all=False, shadin
     return {"width": width, "height": height, "format": "png", "method": method, "image_base64": data}
 
 
+INTERPOLATIONS = {"bezier": "BEZIER", "linear": "LINEAR", "constant": "CONSTANT"}
+
+
+def cmd_set_keyframe(object, frame, location=None, rotation=None, scale=None, interpolation=None):
+    """Pose an object at a frame and keyframe what was given. rotation is in degrees."""
+    obj = _get_object(object)
+    frame = int(frame)
+    keyed = []
+    for prop, value in (("location", location), ("rotation_euler", rotation), ("scale", scale)):
+        if value is None:
+            continue
+        if prop == "rotation_euler":
+            value = [math.radians(a) for a in value]
+        elif prop == "scale" and isinstance(value, (int, float)):
+            value = [value] * 3
+        setattr(obj, prop, value)
+        obj.keyframe_insert(data_path=prop, frame=frame)
+        keyed.append(prop)
+    if not keyed:
+        raise ValueError("Give at least one of location, rotation or scale.")
+    if interpolation:
+        mode = INTERPOLATIONS.get(interpolation.lower())
+        if mode is None:
+            raise ValueError("interpolation must be one of: %s" % ", ".join(INTERPOLATIONS))
+        for fcurve in _fcurves(obj):
+            for point in fcurve.keyframe_points:
+                if int(round(point.co.x)) == frame:
+                    point.interpolation = mode
+    return {"object": obj.name, "frame": frame, "keyed": keyed}
+
+
+def _fcurves(obj):
+    action = obj.animation_data.action if obj.animation_data else None
+    if action is None:
+        return []
+    if hasattr(action, "fcurves"):
+        return list(action.fcurves)
+    # Blender 4.4+ layered actions keep the curves in channelbags
+    curves = []
+    for layer in getattr(action, "layers", []):
+        for strip in layer.strips:
+            for bag in getattr(strip, "channelbags", []):
+                curves.extend(bag.fcurves)
+    return curves
+
+
+def cmd_set_animation_settings(frame_start=None, frame_end=None, fps=None, current_frame=None):
+    scene = bpy.context.scene
+    if frame_start is not None:
+        scene.frame_start = int(frame_start)
+    if frame_end is not None:
+        scene.frame_end = int(frame_end)
+    if fps is not None:
+        scene.render.fps = int(fps)
+        scene.render.fps_base = 1.0
+    if current_frame is not None:
+        scene.frame_set(int(current_frame))
+    return {"frame_start": scene.frame_start, "frame_end": scene.frame_end,
+            "fps": scene.render.fps, "current_frame": scene.frame_current}
+
+
+def cmd_clear_animation(object):
+    obj = _get_object(object)
+    obj.animation_data_clear()
+    return {"object": obj.name, "cleared": True}
+
+
 REFERENCE_ROTATIONS = {
     "front": (90, 0, 0),
     "back": (90, 0, 180),
@@ -854,6 +921,9 @@ COMMANDS = {
     "clear_scene": cmd_clear_scene,
     "execute_code": cmd_execute_code,
     "set_view": cmd_set_view,
+    "set_keyframe": cmd_set_keyframe,
+    "set_animation_settings": cmd_set_animation_settings,
+    "clear_animation": cmd_clear_animation,
     "get_viewport_screenshot": cmd_get_viewport_screenshot,
     "add_reference_image": cmd_add_reference_image,
     "export_model": cmd_export_model,

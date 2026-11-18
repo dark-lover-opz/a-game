@@ -192,3 +192,17 @@ def test_missing_numpy_export_error_gives_advice():
     assert "no numpy" in str(advice) and "obj or stl" in str(advice)
     other = ValueError("disk full")
     assert bridge._explain_export_error("glb", other) is other
+
+
+def test_keyframes_animate_between_frames():
+    ok("create_object", type="cube", name="Mover")
+    ok("set_animation_settings", frame_start=1, frame_end=24, fps=24)
+    ok("set_keyframe", object="Mover", frame=1, location=[0, 0, 0], rotation=[0, 0, 0])
+    ok("set_keyframe", object="Mover", frame=21, location=[10, 0, 0], rotation=[0, 0, 90], interpolation="linear")
+    mid = ok("set_animation_settings", current_frame=11)
+    assert mid["current_frame"] == 11
+    obj = bpy.data.objects["Mover"]
+    assert abs(obj.location.x - 5.0) < 0.6
+    assert bridge.run_command("set_keyframe", {"object": "Mover", "frame": 5})["status"] == "error"
+    ok("clear_animation", object="Mover")
+    assert obj.animation_data is None
