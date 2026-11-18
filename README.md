@@ -1,9 +1,23 @@
 # Claude Blender Bridge
 
 Let Claude build 3D models in **your own Blender, on your own computer**.
-Send Claude a reference picture; it studies the object, builds it in Blender
-step by step, takes viewport screenshots to compare against your reference,
-and fixes what doesn't match.
+Send Claude a reference picture: it studies the object, builds it in Blender
+step by step, takes screenshots to compare with your picture, and fixes what
+doesn't match. It can also animate, render pictures and export videos.
+
+![A blocky street scene with a character, a dog and a suitcase, built and rendered by Claude in Blender](docs/images/blocky-street.jpg)
+
+*Built from a single reference image: Claude made the character, dog, suitcase, street, fog and lighting, then rendered it with EEVEE.*
+
+## What it can do
+
+| | |
+|---|---|
+| ![A reference drawing of a rocket next to the 3D rocket Claude built](docs/images/rocket-from-reference.jpg) | **Model from a reference.** Claude reads your picture (parts, proportions, colours), blocks out the big shapes, checks screenshots from several angles and refines. |
+| ![A blocky dog wagging its tail](docs/images/tail-wag.gif) | **Animate and render.** Keyframe objects, cameras and character joints, render stills with EEVEE or Cycles, and export MP4 videos. |
+| ![The Claude tab in Blender's sidebar asking for permission](docs/images/sidebar.png) | **You decide.** Nothing happens in Blender until you click Allow, and you can take it back any time. |
+
+## How it works
 
 ```
  Claude (Desktop / Code)  ──MCP──▶  claude-blender-mcp  ──localhost:9876──▶  Blender add-on  ──▶  your scene
@@ -23,6 +37,8 @@ opens a dialog:
 > **Allow Claude to use Blender?** Claude wants to use this Blender. It will be
 > able to create, change and delete objects and run Python scripts in this Blender.
 > ☐ Don't ask again · **Deny** · **Allow**
+
+![Blender asking "Allow Claude to use Blender?" over a scene](docs/images/permission-dialog.jpg)
 
 Nothing runs until you click **Allow** (the button says **OK** in Blender 4.0).
 The dialog stays open until you answer, even if you move the mouse away.
