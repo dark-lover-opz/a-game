@@ -1,0 +1,46 @@
+name: Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  mcp-server:
+    name: MCP server (Python ${{ matrix.python }}, ${{ matrix.mcp }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - python: "3.10"
+            mcp: "mcp<2"
+          - python: "3.12"
+            mcp: "mcp>=2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install "${{ matrix.mcp }}" -e ".[test]"
+      - name: Test (add-on tests skip without bpy)
+        run: pytest -q
+
+  blender-addon:
+    name: Blender add-on (bpy 5.3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"  # bpy 5.3 is built for Python 3.13
+      - name: Install system libraries bpy needs
+        run: sudo apt-get update && sudo apt-get install -y libxi6 libxxf86vm1 libxfixes3 libxrender1 libxkbcommon0 libsm6 libgl1 libegl1
+      - name: Install
+        run: pip install "bpy==5.3.*" -e ".[test]"
+      - name: Test
+        run: pytest -q
