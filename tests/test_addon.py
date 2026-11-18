@@ -228,3 +228,18 @@ def test_render_image_and_animation(tmp_path):
 def test_render_without_camera_is_explained():
     response = bridge.run_command("render_image", {"engine": "cycles"})
     assert response["status"] == "error" and "no camera" in response["message"]
+
+
+def test_blocky_character_is_posable():
+    info = ok("create_blocky_character", name="Hero", location=[1, 0, 0], height=2.0, hair="fluffy", ears=True,
+              colors={"shirt": [0.9, 0.9, 0.9]}, pose={"left_arm": [0, 175, 0]})
+    assert "Hero_Shoulder_L" in info["joints"] and info["parts"] > 20
+    hero = [o for o in bpy.data.objects if o.name.startswith("Hero_") and o.type == "MESH"]
+    top = max((o.matrix_world @ v.co).z for o in hero for v in o.data.vertices)
+    assert 2.0 <= top <= 2.4  # 2 m tall plus hair and ears
+    hand = bpy.data.objects["Hero_Hand_L"]
+    assert hand.matrix_world.translation.z > 1.9  # raised arm puts the hand above the head
+    ok("set_keyframe", object="Hero_Shoulder_R", frame=1, rotation=[30, 0, 0])
+    assert bridge.run_command("create_blocky_character", {"name": "Bad", "hair": "mohawk"})["status"] == "error"
+    assert "Bad" not in bpy.data.collections  # nothing half-built is left behind
+    assert bridge.run_command("create_blocky_character", {"name": "Hero"})["status"] == "error"  # name taken

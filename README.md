@@ -103,6 +103,7 @@ tracing guide (`add_reference_image`).
 | `blender_status` | Is Blender reachable, and has the user allowed Claude yet? |
 | `get_scene_info`, `get_object_info` | Read what's in the scene |
 | `create_object` | Cube, spheres, cylinder, cone, torus, plane, monkey, empty, text, camera, lights |
+| `create_blocky_character` | A posable blocky character with pixel textures, ready to animate |
 | `modify_object` | Move / rotate / scale / rename / hide / parent |
 | `set_material` | Color, metal, roughness, emission, transparency |
 | `delete_objects`, `clear_scene` | Remove objects |

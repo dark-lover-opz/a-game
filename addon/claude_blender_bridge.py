@@ -24,6 +24,7 @@ import json
 import math
 import os
 import queue
+import random
 import socket
 import tempfile
 import threading
@@ -939,6 +940,147 @@ def cmd_render_animation(path, engine=None, resolution=None, samples=None, camer
             "bytes": os.path.getsize(path) if os.path.exists(path) else None}
 
 
+def _pixel_material(name, rgb, variation=0.1, roughness=0.75):
+    """A material whose colour jitters per 'pixel' block, like blocky game art."""
+    mat = bpy.data.materials.get(name)
+    if mat is not None:
+        return mat
+    mat = bpy.data.materials.new(name)
+    if bpy.app.version < (5, 0, 0):
+        mat.use_nodes = True
+    mat.diffuse_color = (*rgb, 1)
+    nt = mat.node_tree
+    nt.nodes.clear()
+    out = nt.nodes.new("ShaderNodeOutputMaterial")
+    bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
+    nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    bsdf.inputs["Roughness"].default_value = roughness
+    geo = nt.nodes.new("ShaderNodeNewGeometry")
+    inset = nt.nodes.new("ShaderNodeVectorMath")
+    inset.operation = "SCALE"
+    inset.inputs["Scale"].default_value = -0.5 * BLOCK_PIXEL
+    nt.links.new(geo.outputs["Normal"], inset.inputs[0])
+    centre = nt.nodes.new("ShaderNodeVectorMath")
+    centre.operation = "ADD"
+    nt.links.new(geo.outputs["Position"], centre.inputs[0])
+    nt.links.new(inset.outputs["Vector"], centre.inputs[1])
+    snap = nt.nodes.new("ShaderNodeVectorMath")
+    snap.operation = "SNAP"
+    snap.inputs[1].default_value = (BLOCK_PIXEL,) * 3
+    nt.links.new(centre.outputs["Vector"], snap.inputs[0])
+    noise = nt.nodes.new("ShaderNodeTexWhiteNoise")
+    noise.noise_dimensions = "3D"
+    nt.links.new(snap.outputs["Vector"], noise.inputs["Vector"])
+    ramp = nt.nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = (*[c * (1 - variation) for c in rgb], 1)
+    ramp.color_ramp.elements[1].color = (*[min(1.0, c * (1 + variation)) for c in rgb], 1)
+    nt.links.new(noise.outputs["Value"], ramp.inputs["Fac"])
+    nt.links.new(ramp.outputs["Color"], bsdf.inputs["Base Color"])
+    return mat
+
+
+BLOCK_PIXEL = 0.0625  # one "pixel" of the blocky style; a character is 32 pixels = 2 m tall
+
+CHARACTER_COLORS = {
+    "skin": (0.93, 0.80, 0.68), "hair": (0.25, 0.15, 0.08), "eyes": (0.03, 0.03, 0.035),
+    "shirt": (0.20, 0.45, 0.80), "pants": (0.12, 0.14, 0.30), "shoes": (0.06, 0.05, 0.05),
+}
+
+
+def _block(name, lo, hi, mat, parent, collection, px):
+    lo = mathutils.Vector(lo) * px
+    hi = mathutils.Vector(hi) * px
+    size = hi - lo
+    mesh = _mesh_from_bmesh(name, lambda bm: bmesh.ops.create_cube(bm, size=1.0))
+    for v in mesh.vertices:
+        v.co = mathutils.Vector((v.co.x * size.x, v.co.y * size.y, v.co.z * size.z))
+    mesh.materials.append(mat)
+    obj = bpy.data.objects.new(name, mesh)
+    obj.location = (lo + hi) / 2
+    collection.objects.link(obj)
+    obj.parent = parent
+    return obj
+
+
+def _joint(name, loc, parent, collection, px):
+    joint = bpy.data.objects.new(name, None)
+    joint.empty_display_type = "SPHERE"
+    joint.empty_display_size = 0.6 * px * 4
+    joint.location = mathutils.Vector(loc) * px
+    collection.objects.link(joint)
+    joint.parent = parent
+    return joint
+
+
+def cmd_create_blocky_character(name="Blocky", location=(0, 0, 0), facing=0.0, height=2.0, colors=None,
+                                hair="short", ears=False, pose=None):
+    """Build a posable blocky character. Joints (empties) are named <name>_Neck, <name>_Shoulder_L/R and
+    <name>_Hip_L/R; rotate or keyframe them to pose and animate. Faces -Y when facing is 0."""
+    if hair not in ("none", "short", "fluffy", "long"):
+        raise ValueError("hair must be none, short, fluffy or long")
+    pose_keys = {"neck", "left_arm", "right_arm", "left_leg", "right_leg"}
+    if set(pose or {}) - pose_keys:
+        raise ValueError("pose keys: %s" % ", ".join(sorted(pose_keys)))
+    unknown = set(colors or {}) - set(CHARACTER_COLORS)
+    if unknown:
+        raise ValueError("colors keys: %s" % ", ".join(CHARACTER_COLORS))
+    if bpy.data.collections.get(name) is not None:
+        raise ValueError("A collection named %r already exists; pick another name." % name)
+    px = float(height) / 32.0
+    palette = dict(CHARACTER_COLORS)
+    palette.update({k: tuple(v[:3]) for k, v in (colors or {}).items()})
+    mats = {part: _pixel_material("%s_%s" % (name, part.title()), rgb, 0.06 if part == "skin" else 0.12)
+            for part, rgb in palette.items()}
+    collection = bpy.data.collections.new(name)
+    bpy.context.scene.collection.children.link(collection)
+    root = bpy.data.objects.new(name, None)
+    root.empty_display_type = "PLAIN_AXES"
+    collection.objects.link(root)
+    root.location = location
+    root.rotation_euler.z = math.radians(facing)
+
+    def block(part, lo, hi, mat, parent):
+        return _block("%s_%s" % (name, part), lo, hi, mats[mat], parent, collection, px)
+
+    for side, x0 in (("R", -4), ("L", 0)):  # the character's right is -X
+        hip = _joint("%s_Hip_%s" % (name, side), (x0 + 2, 0, 12), root, collection, px)
+        block("Leg_" + side, (-2, -2, -11), (2, 2, 0), "pants", hip)
+        block("Shoe_" + side, (-2.1, -2.15, -12), (2.1, 2.1, -10.8), "shoes", hip)
+    block("Torso", (-4, -2, 12), (4, 2, 24), "shirt", root)
+    for side, x in (("R", -6), ("L", 6)):
+        shoulder = _joint("%s_Shoulder_%s" % (name, side), (x, 0, 22), root, collection, px)
+        block("Arm_" + side, (-2, -2, -7), (2, 2, 2), "shirt", shoulder)
+        block("Hand_" + side, (-2.02, -2.02, -10), (2.02, 2.02, -7), "skin", shoulder)
+    neck = _joint(name + "_Neck", (0, 0, 24), root, collection, px)
+    block("Head", (-4, -4, 0), (4, 4, 8), "skin", neck)
+    block("Eye_R", (-3, -4.08, 2.6), (-1, -3.98, 3.8), "eyes", neck)
+    block("Eye_L", (1, -4.08, 2.6), (3, -3.98, 3.8), "eyes", neck)
+    if hair in ("short", "fluffy", "long"):
+        block("Hair_Top", (-4.25, -4.25, 6), (4.25, 4.25, 8.3), "hair", neck)
+        block("Hair_Back", (-4.25, 0, 1 if hair == "long" else 3), (4.25, 4.25, 8.3), "hair", neck)
+        block("Hair_Fringe", (-4.25, -4.3, 5), (4.25, -3.95, 6.1), "hair", neck)
+        if hair == "long":
+            block("Hair_Down", (-4.25, 0.5, -6), (4.25, 4.3, 1), "hair", neck)
+        if hair == "fluffy":
+            rng = random.Random(name)
+            for i in range(14):
+                x = rng.choice((-5, -4, -2, 0, 2, 3, 4))
+                y = rng.uniform(-4.4, 3.4)
+                z = 8.2 if -3 < x < 3 else rng.uniform(5, 8)
+                block("Hair_Tuft_%d" % i, (x, y, z), (x + 1, y + 1, z + 1), "hair", neck)
+    if ears:
+        for side, x0 in (("R", -3.8), ("L", 1.0)):
+            block("Ear_" + side, (x0, -1.2, 7.8), (x0 + 2.8, 1.2, 10.8), "hair", neck)
+
+    joints = {"neck": "Neck", "left_arm": "Shoulder_L", "right_arm": "Shoulder_R",
+              "left_leg": "Hip_L", "right_leg": "Hip_R"}
+    for key, angles in (pose or {}).items():
+        bpy.data.objects["%s_%s" % (name, joints[key])].rotation_euler = [math.radians(a) for a in angles]
+    bpy.context.view_layer.update()
+    return {"name": name, "collection": collection.name, "height_m": float(height),
+            "joints": ["%s_%s" % (name, j) for j in joints.values()], "parts": len(collection.objects)}
+
+
 REFERENCE_ROTATIONS = {
     "front": (90, 0, 0),
     "back": (90, 0, 180),
@@ -1046,6 +1188,7 @@ COMMANDS = {
     "set_animation_settings": cmd_set_animation_settings,
     "clear_animation": cmd_clear_animation,
     "render_image": cmd_render_image,
+    "create_blocky_character": cmd_create_blocky_character,
     "render_animation": cmd_render_animation,
     "get_viewport_screenshot": cmd_get_viewport_screenshot,
     "add_reference_image": cmd_add_reference_image,
