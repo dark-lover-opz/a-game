@@ -37,7 +37,7 @@ import mathutils
 HOST = "127.0.0.1"
 DEFAULT_PORT = 9876
 PERMISSION_TIMEOUT = 120.0  # seconds a request waits for you to click Allow
-JOB_TIMEOUT = 600.0  # seconds a single command may take
+JOB_TIMEOUT = 1800.0  # seconds a single command may take (video renders can be slow)
 TICK = 0.05
 
 # Commands that are answered without asking for permission. They do not
@@ -818,6 +818,127 @@ def cmd_clear_animation(object):
     return {"object": obj.name, "cleared": True}
 
 
+def _set_engine(render, engine):
+    """Switch to a friendly engine name, whatever this Blender version calls it."""
+    if engine is None:
+        return
+    candidates = {"eevee": ("BLENDER_EEVEE_NEXT", "BLENDER_EEVEE"), "cycles": ("CYCLES",),
+                  "workbench": ("BLENDER_WORKBENCH",)}.get(engine.lower(), (engine.upper(),))
+    for candidate in candidates:
+        try:  # the list of engines only exists at runtime, so just try each name
+            render.engine = candidate
+            return
+        except TypeError:
+            continue
+    raise ValueError("Unknown render engine %r. Use eevee, cycles or workbench." % engine)
+
+
+@contextlib.contextmanager
+def _render_settings(engine, resolution, samples, camera):
+    """Apply render settings for one render, then put the user's settings back."""
+    scene = bpy.context.scene
+    render = scene.render
+    saved = (render.engine, render.resolution_x, render.resolution_y, render.resolution_percentage,
+             scene.camera, scene.cycles.samples if hasattr(scene, "cycles") else None,
+             scene.eevee.taa_render_samples)
+    try:
+        _set_engine(render, engine)
+        if resolution:
+            render.resolution_x, render.resolution_y = int(resolution[0]), int(resolution[1])
+            render.resolution_percentage = 100
+        if camera:
+            scene.camera = _get_object(camera)
+        if scene.camera is None:
+            raise ValueError("The scene has no camera. Create one with create_object(type='camera').")
+        if samples:
+            if render.engine == "CYCLES":
+                scene.cycles.samples = int(samples)
+            else:
+                scene.eevee.taa_render_samples = int(samples)
+        yield scene
+    finally:
+        (render.engine, render.resolution_x, render.resolution_y, render.resolution_percentage,
+         scene.camera, cycles_samples, scene.eevee.taa_render_samples) = saved
+        if cycles_samples is not None:
+            scene.cycles.samples = cycles_samples
+
+
+def cmd_render_image(engine=None, resolution=None, samples=None, camera=None, frame=None,
+                     save_path=None, max_size=1280):
+    """Render through the scene camera. Returns the picture, and saves it if save_path is given."""
+    scene = bpy.context.scene
+    if frame is not None:
+        scene.frame_set(int(frame))
+    path = os.path.abspath(os.path.expanduser(save_path)) if save_path else \
+        os.path.join(tempfile.gettempdir(), "claude_render_%d.png" % os.getpid())
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    started = time.monotonic()
+    with _render_settings(engine, resolution, samples, camera):
+        old_path, old_format = scene.render.filepath, scene.render.image_settings.file_format
+        try:
+            scene.render.filepath = path
+            scene.render.image_settings.file_format = "PNG"
+            bpy.ops.render.render(write_still=True)
+        finally:
+            scene.render.filepath, scene.render.image_settings.file_format = old_path, old_format
+        used_engine = scene.render.engine
+    seconds = round(time.monotonic() - started, 1)
+    preview = path if save_path is None else os.path.join(tempfile.gettempdir(), "claude_preview_%d.png" % os.getpid())
+    image = bpy.data.images.load(path, check_existing=False)
+    try:
+        width, height = image.size
+        if max(width, height) > max_size:
+            factor = max_size / float(max(width, height))
+            image.scale(max(1, int(width * factor)), max(1, int(height * factor)))
+        image.filepath_raw = preview
+        image.file_format = "PNG"
+        image.save()
+    finally:
+        bpy.data.images.remove(image)
+    with open(preview, "rb") as handle:
+        data = base64.b64encode(handle.read()).decode("ascii")
+    with contextlib.suppress(OSError):
+        os.remove(preview)
+    return {"engine": used_engine, "width": width, "height": height, "seconds": seconds,
+            "saved_to": path if save_path else None, "format": "png", "image_base64": data}
+
+
+def cmd_render_animation(path, engine=None, resolution=None, samples=None, camera=None,
+                         frame_start=None, frame_end=None, fps=None):
+    """Render the animation to an MP4 video (H.264)."""
+    scene = bpy.context.scene
+    path = os.path.abspath(os.path.expanduser(path))
+    if not path.lower().endswith(".mp4"):
+        path += ".mp4"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    cmd_set_animation_settings(frame_start=frame_start, frame_end=frame_end, fps=fps)
+    render = scene.render
+    settings = render.image_settings
+    has_media_type = hasattr(settings, "media_type")  # Blender 5.0+ picks "video" before the format
+    saved = (render.filepath, settings.file_format, render.ffmpeg.format, render.ffmpeg.codec)
+    saved_media = settings.media_type if has_media_type else None
+    started = time.monotonic()
+    with _render_settings(engine, resolution, samples, camera):
+        try:
+            render.filepath = path
+            if has_media_type:
+                settings.media_type = "VIDEO"
+            settings.file_format = "FFMPEG"
+            render.ffmpeg.format = "MPEG4"
+            render.ffmpeg.codec = "H264"
+            with contextlib.suppress(AttributeError, TypeError):
+                render.ffmpeg.constant_rate_factor = "HIGH"
+            bpy.ops.render.render(animation=True)
+        finally:
+            if has_media_type:
+                settings.media_type = saved_media
+            (render.filepath, settings.file_format, render.ffmpeg.format, render.ffmpeg.codec) = saved
+    frames = scene.frame_end - scene.frame_start + 1
+    return {"path": path, "frames": frames, "fps": scene.render.fps,
+            "seconds_to_render": round(time.monotonic() - started, 1),
+            "bytes": os.path.getsize(path) if os.path.exists(path) else None}
+
+
 REFERENCE_ROTATIONS = {
     "front": (90, 0, 0),
     "back": (90, 0, 180),
@@ -924,6 +1045,8 @@ COMMANDS = {
     "set_keyframe": cmd_set_keyframe,
     "set_animation_settings": cmd_set_animation_settings,
     "clear_animation": cmd_clear_animation,
+    "render_image": cmd_render_image,
+    "render_animation": cmd_render_animation,
     "get_viewport_screenshot": cmd_get_viewport_screenshot,
     "add_reference_image": cmd_add_reference_image,
     "export_model": cmd_export_model,

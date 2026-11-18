@@ -20,8 +20,8 @@ except ImportError:  # mcp 1.x
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 9876
-# Long enough for the user to click Allow (120 s) plus a slow command.
-SOCKET_TIMEOUT = 780.0
+# Long enough for the user to click Allow (120 s) plus a slow command such as a video render.
+SOCKET_TIMEOUT = 2000.0
 
 
 class BlenderError(Exception):
@@ -267,6 +267,41 @@ def get_viewport_screenshot(
     result = _call("get_viewport_screenshot", view=view, frame_all=frame_all, shading=shading,
                    max_size=max_size)
     return Image(data=base64.b64decode(result["image_base64"]), format="png")
+
+
+@mcp.tool()
+def render_image(
+    engine: str | None = None,
+    resolution: list[int] | None = None,
+    samples: int | None = None,
+    camera: str | None = None,
+    frame: int | None = None,
+    save_path: str | None = None,
+) -> Image:
+    """Render the final picture through the scene camera and look at it.
+    engine: eevee (fast), cycles (realistic, slower) or workbench (quick preview); default is the
+    scene's engine. resolution: [width, height]. save_path also keeps the PNG on the user's computer.
+    The user's own render settings are restored afterwards."""
+    result = _call("render_image", engine=engine, resolution=resolution, samples=samples, camera=camera,
+                   frame=frame, save_path=save_path)
+    return Image(data=base64.b64decode(result["image_base64"]), format="png")
+
+
+@mcp.tool()
+def render_animation(
+    path: str,
+    engine: str | None = None,
+    resolution: list[int] | None = None,
+    samples: int | None = None,
+    camera: str | None = None,
+    frame_start: int | None = None,
+    frame_end: int | None = None,
+    fps: int | None = None,
+) -> str:
+    """Render the animation to an MP4 video file. This can take minutes: tell the user first, and
+    keep resolution and samples modest (for example [1280, 720] and 16-32 samples)."""
+    return _text(_call("render_animation", path=path, engine=engine, resolution=resolution, samples=samples,
+                       camera=camera, frame_start=frame_start, frame_end=frame_end, fps=fps))
 
 
 IMAGE_FORMATS = {".png": "png", ".jpg": "jpeg", ".jpeg": "jpeg", ".gif": "gif", ".webp": "webp"}
