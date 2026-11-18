@@ -1,5 +1,7 @@
 # Claude Blender Bridge
 
+[![Tests](https://github.com/dark-lover-opz/a-game/actions/workflows/tests.yml/badge.svg)](https://github.com/dark-lover-opz/a-game/actions/workflows/tests.yml)
+
 Let Claude build 3D models in **your own Blender, on your own computer**.
 Send Claude a reference picture: it studies the object, builds it in Blender
 step by step, takes screenshots to compare with your picture, and fixes what
@@ -151,3 +153,6 @@ Claude, save your work first, and use **Deny**, **Reset permission** or
 uv venv && uv pip install -e ".[test]" bpy   # bpy is Blender as a Python module, used by the add-on tests
 uv run pytest
 ```
+
+GitHub Actions runs the same tests on every pull request: the MCP server with
+mcp 1.x and 2.x, and the add-on inside Blender 5.3's `bpy` module.

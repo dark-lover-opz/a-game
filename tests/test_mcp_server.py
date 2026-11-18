@@ -83,7 +83,8 @@ def test_view_image_file(tmp_path):
     path = tmp_path / "ref.jpg"
     path.write_bytes(b"\xff\xd8\xffdata")
     content = server.view_image_file(str(path)).to_image_content()
-    assert content.mime_type == "image/jpeg"
+    mime = getattr(content, "mime_type", None) or getattr(content, "mimeType")  # mcp 2.x / 1.x
+    assert mime == "image/jpeg"
     with pytest.raises(server.ToolError):
         server.view_image_file(str(tmp_path / "missing.png"))
     with pytest.raises(server.ToolError):
