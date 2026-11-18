@@ -206,3 +206,25 @@ def test_keyframes_animate_between_frames():
     assert bridge.run_command("set_keyframe", {"object": "Mover", "frame": 5})["status"] == "error"
     ok("clear_animation", object="Mover")
     assert obj.animation_data is None
+
+
+def test_render_image_and_animation(tmp_path):
+    ok("create_object", type="monkey", name="Star", color=[1, 0.5, 0])
+    ok("create_object", type="camera", name="Cam", location=[0, -6, 0], rotation=[90, 0, 0])
+    ok("create_object", type="sun_light", name="Sun", rotation=[45, 0, 30])
+    bpy.context.scene.render.resolution_x = 1920
+    # Cycles renders on the CPU, so this works without a graphics card (Workbench/EEVEE need one)
+    out = ok("render_image", engine="cycles", samples=1, resolution=[64, 36], save_path=str(tmp_path / "still.png"))
+    assert (out["width"], out["height"]) == (64, 36) and out["engine"] == "CYCLES"
+    assert (tmp_path / "still.png").stat().st_size > 0 and out["image_base64"]
+    assert bpy.context.scene.render.resolution_x == 1920  # the user's settings come back
+    ok("set_keyframe", object="Star", frame=1, rotation=[0, 0, 0])
+    ok("set_keyframe", object="Star", frame=6, rotation=[0, 0, 90])
+    video = ok("render_animation", path=str(tmp_path / "spin"), engine="cycles", samples=1, resolution=[64, 36],
+               frame_start=1, frame_end=6, fps=12)
+    assert video["path"].endswith("spin.mp4") and video["bytes"] > 0 and video["frames"] == 6
+
+
+def test_render_without_camera_is_explained():
+    response = bridge.run_command("render_image", {"engine": "cycles"})
+    assert response["status"] == "error" and "no camera" in response["message"]
