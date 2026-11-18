@@ -176,7 +176,7 @@ def start_server(port=None):
     _State.server_thread.start()
     if not bpy.app.timers.is_registered(_tick):
         bpy.app.timers.register(_tick, first_interval=TICK, persistent=True)
-    _log("Server started on %s:%d" % (HOST, port))
+    _log("Server started (port %d)" % port)
 
 
 def stop_server():
@@ -256,26 +256,15 @@ def _denied_response():
 
 def _ask_permission():
     _State.permission = "pending"
-    _log("Claude is asking for permission to use Blender")
+    _log("Claude asked for permission")
     _redraw()
-
-    def draw(menu, _context):
-        layout = menu.layout
-        layout.label(text="Claude wants to use this Blender.")
-        layout.label(text="It will be able to create, change and delete objects")
-        layout.label(text="and run Python scripts in this Blender.")
-        layout.separator()
-        layout.operator(CLAUDEBRIDGE_OT_allow.bl_idname, icon="CHECKMARK")
-        layout.operator(CLAUDEBRIDGE_OT_allow_always.bl_idname, icon="LOCKED")
-        layout.operator(CLAUDEBRIDGE_OT_deny.bl_idname, icon="CANCEL")
-
     wm = bpy.context.window_manager
     if bpy.app.background or wm is None or not wm.windows:
-        return  # no screen to show a pop-up on: the sidebar panel / Python API decide instead
+        return  # no screen to show a dialog on: the sidebar panel / Python API decide instead
     window = wm.windows[0]
     try:
         with bpy.context.temp_override(window=window, screen=window.screen):
-            bpy.context.window_manager.popup_menu(draw, title="Claude Blender Bridge", icon="QUESTION")
+            bpy.ops.claude_bridge.ask("INVOKE_DEFAULT")
     except Exception:
         traceback.print_exc()
 
@@ -656,11 +645,23 @@ def cmd_set_view(view=None, frame_all=True, perspective=None):
         raise RuntimeError("No 3D Viewport is open in Blender.")
     window, area, region = found
     space = area.spaces.active
+    view_prefs = bpy.context.preferences.view
+    smooth, view_prefs.smooth_view = view_prefs.smooth_view, 0  # jump, don't animate
+    try:
+        _set_view(window, area, region, space, view, frame_all, perspective)
+    finally:
+        view_prefs.smooth_view = smooth
+    return {"view": view, "perspective": space.region_3d.view_perspective}
+
+
+def _set_view(window, area, region, space, view, frame_all, perspective):
     with bpy.context.temp_override(window=window, area=area, region=region):
         if view:
             view = view.lower()
             if view == "camera":
-                bpy.ops.view3d.view_camera()
+                if bpy.context.scene.camera is None:
+                    raise ValueError("The scene has no camera.")
+                space.region_3d.view_perspective = "CAMERA"  # view_camera() would toggle
             elif view in VIEWS:
                 bpy.ops.view3d.view_axis(type=VIEWS[view])
             elif view == "iso":
@@ -673,19 +674,41 @@ def cmd_set_view(view=None, frame_all=True, perspective=None):
             space.region_3d.view_perspective = "PERSP" if perspective else "ORTHO"
         if frame_all and view != "camera":
             bpy.ops.view3d.view_all(center=False)
-    return {"view": view, "perspective": space.region_3d.view_perspective}
 
 
-def cmd_get_viewport_screenshot(max_size=800, view=None, frame_all=False, shading=None):
-    found = _find_view3d()
-    if found is None:
-        raise RuntimeError("No 3D Viewport is open in Blender.")
-    window, area, region = found
-    if shading:
-        area.spaces.active.shading.type = shading.upper()
-    if view or frame_all:
-        cmd_set_view(view=view, frame_all=frame_all)
-    path = os.path.join(tempfile.gettempdir(), "claude_viewport_%d.png" % os.getpid())
+def _capture_offscreen(area, region, path, max_size):
+    """Draw the viewport into an off-screen image. Works even when Blender is covered or
+    minimized, and on systems where reading the screen back returns a black image."""
+    import gpu
+
+    space = area.spaces.active
+    r3d = space.region_3d
+    r3d.update()  # view changes made in this same step are not applied until a redraw
+    factor = min(1.0, max_size / float(max(region.width, region.height)))
+    width, height = max(1, int(region.width * factor)), max(1, int(region.height * factor))
+    offscreen = gpu.types.GPUOffScreen(width, height)
+    try:
+        offscreen.draw_view3d(bpy.context.scene, bpy.context.view_layer, space, region,
+                              r3d.view_matrix, r3d.window_matrix, do_color_management=True)
+        rows = offscreen.texture_color.read().to_list()
+    finally:
+        offscreen.free()
+    pixels = [c / 255.0 for row in rows for px in row for c in px]
+    if not any(pixels[i] for i in range(0, len(pixels), 4)) and not any(pixels[i] for i in range(1, len(pixels), 4)):
+        raise RuntimeError("off-screen capture came back empty")
+    image = bpy.data.images.new("claude_capture", width, height, alpha=True)
+    try:
+        image.pixels.foreach_set(pixels)
+        image.filepath_raw = path
+        image.file_format = "PNG"
+        image.save()
+    finally:
+        bpy.data.images.remove(image)
+    return width, height
+
+
+def _capture_screen(window, area, region, path, max_size):
+    """Fallback: grab the viewport's pixels from the screen."""
     with bpy.context.temp_override(window=window, area=area, region=region):
         bpy.ops.screen.screenshot_area(filepath=path)
     image = bpy.data.images.load(path, check_existing=False)
@@ -697,14 +720,35 @@ def cmd_get_viewport_screenshot(max_size=800, view=None, frame_all=False, shadin
             image.filepath_raw = path
             image.file_format = "PNG"
             image.save()
-        width, height = image.size
+        return tuple(image.size)
     finally:
         bpy.data.images.remove(image)
+
+
+def cmd_get_viewport_screenshot(max_size=800, view=None, frame_all=False, shading=None):
+    if bpy.app.background:
+        raise RuntimeError("Blender is running without a window (background mode), so there is no viewport to capture.")
+    found = _find_view3d()
+    if found is None:
+        raise RuntimeError("No 3D Viewport is open in Blender.")
+    window, area, region = found
+    if shading:
+        area.spaces.active.shading.type = shading.upper()
+    if view or frame_all:
+        cmd_set_view(view=view, frame_all=frame_all)
+    path = os.path.join(tempfile.gettempdir(), "claude_viewport_%d.png" % os.getpid())
+    try:
+        width, height = _capture_offscreen(area, region, path, max_size)
+        method = "offscreen"
+    except Exception as exc:
+        _log("Off-screen capture failed (%s), grabbing the screen instead" % exc)
+        width, height = _capture_screen(window, area, region, path, max_size)
+        method = "screen"
     with open(path, "rb") as handle:
         data = base64.b64encode(handle.read()).decode("ascii")
     with contextlib.suppress(OSError):
         os.remove(path)
-    return {"width": width, "height": height, "format": "png", "image_base64": data}
+    return {"width": width, "height": height, "format": "png", "method": method, "image_base64": data}
 
 
 REFERENCE_ROTATIONS = {
@@ -755,7 +799,7 @@ def cmd_export_model(path, format=None, selected_only=False):
     elif fmt == "obj":
         bpy.ops.wm.obj_export(filepath=path, export_selected_objects=selected_only)
     elif fmt == "stl":
-        if hasattr(bpy.ops.wm, "stl_export"):
+        if "stl_export" in dir(bpy.ops.wm):  # Blender 4.2+ (hasattr is always True on bpy.ops)
             bpy.ops.wm.stl_export(filepath=path, export_selected_objects=selected_only)
         else:
             bpy.ops.export_mesh.stl(filepath=path, use_selection=selected_only)
@@ -842,6 +886,39 @@ class CLAUDEBRIDGE_OT_stop(bpy.types.Operator):
         return {"FINISHED"}
 
 
+class CLAUDEBRIDGE_OT_ask(bpy.types.Operator):
+    """The permission dialog. It stays open until you answer (moving the mouse does not close it)."""
+
+    bl_idname = "claude_bridge.ask"
+    bl_label = "Allow Claude to use Blender?"
+    bl_options = {"INTERNAL"}
+
+    always: bpy.props.BoolProperty(name="Don't ask again", default=False)
+
+    def invoke(self, context, _event):
+        try:  # Blender 4.1+ can name the buttons
+            return context.window_manager.invoke_props_dialog(
+                self, width=380, title="Allow Claude to use Blender?", confirm_text="Allow")
+        except TypeError:
+            return context.window_manager.invoke_props_dialog(self, width=380)
+
+    def draw(self, _context):
+        col = self.layout.column(align=True)
+        col.label(text="Claude wants to use this Blender.", icon="QUESTION")
+        col.label(text="It will be able to create, change and delete objects")
+        col.label(text="and run Python scripts in this Blender.")
+        col.separator()
+        col.label(text="Click Allow (OK) to let it start. Closing this box")
+        col.label(text="keeps it waiting: answer in the sidebar's Claude tab.")
+        self.layout.prop(self, "always")
+        self.layout.operator(CLAUDEBRIDGE_OT_deny.bl_idname, icon="CANCEL")
+
+    def execute(self, _context):
+        # Counts even if Claude's request already gave up waiting: the next one runs straight away.
+        set_permission("allowed", always=self.always)
+        return {"FINISHED"}
+
+
 class CLAUDEBRIDGE_OT_allow(bpy.types.Operator):
     bl_idname = "claude_bridge.allow"
     bl_label = "Allow (this session)"
@@ -892,7 +969,7 @@ class CLAUDEBRIDGE_PT_panel(bpy.types.Panel):
     def draw(self, _context):
         layout = self.layout
         if _State.running:
-            layout.label(text="Server running on port %d" % _State.port, icon="LINKED")
+            layout.label(text="Running (port %d)" % _State.port, icon="LINKED")
             layout.operator(CLAUDEBRIDGE_OT_stop.bl_idname, icon="PAUSE")
         else:
             layout.label(text="Server stopped", icon="UNLINKED")
@@ -902,8 +979,9 @@ class CLAUDEBRIDGE_PT_panel(bpy.types.Panel):
         permission = "allowed (always)" if _always_allowed() else _State.permission
         if permission == "pending":
             box.alert = True
-            box.label(text="Claude is asking to use Blender", icon="QUESTION")
-            box.label(text="It can change your scene and run Python.")
+            box.label(text="Claude asks to use", icon="QUESTION")
+            box.label(text="this Blender. It can edit")
+            box.label(text="the scene and run Python.")
             box.operator(CLAUDEBRIDGE_OT_allow.bl_idname, icon="CHECKMARK")
             box.operator(CLAUDEBRIDGE_OT_allow_always.bl_idname, icon="LOCKED")
             box.operator(CLAUDEBRIDGE_OT_deny.bl_idname, icon="CANCEL")
@@ -918,11 +996,12 @@ class CLAUDEBRIDGE_PT_panel(bpy.types.Panel):
             col = layout.column(align=True)
             col.label(text="Recent activity:")
             for line in _State.log[-6:]:
-                col.label(text=line)
+                col.label(text=line[9:])  # drop the clock time to fit the sidebar
 
 
 CLASSES = (
     CLAUDEBRIDGE_Preferences,
+    CLAUDEBRIDGE_OT_ask,
     CLAUDEBRIDGE_OT_start,
     CLAUDEBRIDGE_OT_stop,
     CLAUDEBRIDGE_OT_allow,
@@ -946,7 +1025,8 @@ def _auto_start():
 def register():
     for cls in CLASSES:
         bpy.utils.register_class(cls)
-    bpy.app.timers.register(_auto_start, first_interval=1.0)
+    # persistent: otherwise opening a .blend file (e.g. by double-clicking it) cancels the auto-start
+    bpy.app.timers.register(_auto_start, first_interval=1.0, persistent=True)
 
 
 def unregister():
