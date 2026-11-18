@@ -160,6 +160,27 @@ def create_object(
 
 
 @mcp.tool()
+def create_blocky_character(
+    name: str = "Blocky",
+    location: list[float] | None = None,
+    facing: float = 0.0,
+    height: float = 2.0,
+    colors: dict[str, list[float]] | None = None,
+    hair: str = "short",
+    ears: bool = False,
+    pose: dict[str, list[float]] | None = None,
+) -> str:
+    """Build a posable blocky (voxel-style) character with pixel-textured materials.
+    colors: any of skin, hair, eyes, shirt, pants, shoes as [r, g, b] 0-1.
+    hair: none, short, fluffy or long. facing: degrees around Z (0 faces -Y, the front view).
+    pose: degrees [x, y, z] for neck, left_arm, right_arm, left_leg, right_leg
+    (e.g. {"left_arm": [0, 175, 0]} raises the left arm). The joints it returns can be
+    animated with set_keyframe. Add details (ties, belts, logos) with create_object or code."""
+    return _text(_call("create_blocky_character", name=name, location=location, facing=facing, height=height,
+                       colors=colors, hair=hair, ears=ears, pose=pose))
+
+
+@mcp.tool()
 def modify_object(
     name: str,
     location: list[float] | None = None,
