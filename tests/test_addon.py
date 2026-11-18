@@ -184,3 +184,11 @@ def test_permission_request_times_out(monkeypatch):
     thread.join(2)
     assert "click Allow" in box["error"]
     assert bridge._State.permission == "unknown"  # asks again next time
+
+
+def test_missing_numpy_export_error_gives_advice():
+    crash = RuntimeError("Error: Python: ModuleNotFoundError: No module named 'numpy'")
+    advice = bridge._explain_export_error("glb", crash)
+    assert "no numpy" in str(advice) and "obj or stl" in str(advice)
+    other = ValueError("disk full")
+    assert bridge._explain_export_error("glb", other) is other
